@@ -1,38 +1,44 @@
-extends Node
+import asyncio, websockets, os, json
 
-var socket := WebSocketPeer.new()
+PORT = int(os.getenv("PORT", 5000))  # Render จะ override ให้เอง
 
-func _ready():
-    var url = "ws://localhost:8000"  # เปลี่ยนเป็น wss://xxxx.onrender.com เมื่อ deploy
-    var err = socket.connect_to_url(url)
-    if err != OK:
-        print("❌ Failed to connect: ", err)
-    else:
-        print("✅ Connecting to server...")
+board = [["", "", ""], ["", "", ""], ["", "", ""]]
+current_player = "X"
+clients = set()
 
+async def broadcast(data):
+    msg = json.dumps(data)
+    for client in clients:
+        await client.send(msg)
 
-func _process(delta):
-    socket.poll()
+async def handler(ws):
+    global current_player, board
+    clients.add(ws)
 
-    var state = socket.get_ready_state()
+    await ws.send(json.dumps({"type":"state", "board":board, "turn":current_player}))
 
-    if state == WebSocketPeer.STATE_OPEN:
-        while socket.get_available_packet_count() > 0:
-            var text = socket.get_packet().get_string_from_utf8()
-            print("📩 Received:", text)
-            _handle_message(text)
+    try:
+        async for message in ws:
+            data = json.loads(message)
 
-    elif state == WebSocketPeer.STATE_CLOSED:
-        print("⚠️ WebSocket closed:", socket.get_close_code(), socket.get_close_reason())
+            if data["type"] == "move":
+                x, y = data["x"], data["y"]
+                player = data["player"]
 
+                if board[x][y] == "" and player == current_player:
+                    board[x][y] = player
+                    current_player = "O" if current_player == "X" else "X"
 
-func send_json(data: Dictionary):
-    var msg = JSON.stringify(data)
-    socket.send_text(msg)
-    print("📤 Sent:", msg)
+                    await broadcast({"type":"state", "board":board, "turn":current_player})
 
+    except:
+        pass
+    finally:
+        clients.remove(ws)
 
-func _handle_message(msg: String):
-    var json = JSON.parse_string(msg)
-    if typeof(json) == TYPE_DICTIONARY:
-        print("✅ Parsed server data:", json)
+async def main():
+    print(f"Server running on port {PORT}")
+    async with websockets.serve(handler, "0.0.0.0", PORT):
+        await asyncio.Future()
+
+asyncio.run(main())
