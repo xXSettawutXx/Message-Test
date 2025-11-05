@@ -1,46 +1,44 @@
-import asyncio
-import websockets
-import json
-import os  # ใช้ดึง PORT จาก environment
+import asyncio, websockets, os, json
 
+PORT = int(os.getenv("PORT", 5000))  # Render จะ override ให้เอง
+
+board = [["", "", ""], ["", "", ""], ["", "", ""]]
+current_player = "X"
 clients = set()
 
-async def handler(websocket):
-    clients.add(websocket)
-    print(f"✅ Client เชื่อมต่อ: {websocket.remote_address}")
+async def broadcast(data):
+    msg = json.dumps(data)
+    for client in clients:
+        await client.send(msg)
+
+async def handler(ws):
+    global current_player, board
+    clients.add(ws)
+
+    await ws.send(json.dumps({"type":"state", "board":board, "turn":current_player}))
+
     try:
-        async for message in websocket:
-            # พยายาม parse ข้อความเป็น JSON
-            try:
-                data = json.loads(message)
-                sender = data.get("from", "unknown")
-                msg_text = data.get("msg", "")
-            except json.JSONDecodeError:
-                sender = "unknown"
-                msg_text = str(message)
+        async for message in ws:
+            data = json.loads(message)
 
-            print(f"📨 {sender}: {msg_text}")
+            if data["type"] == "move":
+                x, y = data["x"], data["y"]
+                player = data["player"]
 
-            # Broadcast ข้อความไปทุก client
-            broadcast = json.dumps({"from": sender, "msg": msg_text})
-            for client in clients.copy():
-                try:
-                    await client.send(broadcast)
-                except Exception as e:
-                    print(f"❌ Client {client.remote_address} ขาดการเชื่อมต่อ: {e}")
-                    clients.remove(client)
+                if board[x][y] == "" and player == current_player:
+                    board[x][y] = player
+                    current_player = "O" if current_player == "X" else "X"
 
-    except websockets.exceptions.ConnectionClosed:
-        print(f"❌ Client {websocket.remote_address} ปิด connection")
+                    await broadcast({"type":"state", "board":board, "turn":current_player})
+
+    except:
+        pass
     finally:
-        clients.discard(websocket)
+        clients.remove(ws)
 
 async def main():
-    # ดึง PORT จาก environment variable (Render จะส่งมาให้)
-    port = int(os.environ.get("PORT", 9999))
-    print(f"🟢 Server รันที่ ws://0.0.0.0:{port}")
-    async with websockets.serve(handler, "0.0.0.0", port):
-        await asyncio.Future()  # run forever
+    print(f"Server running on port {PORT}")
+    async with websockets.serve(handler, "0.0.0.0", PORT):
+        await asyncio.Future()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
